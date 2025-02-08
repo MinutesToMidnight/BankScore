@@ -1,0 +1,231 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder, OneHotEncoder, PolynomialFeatures
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score, accuracy_score, mean_absolute_error, mean_squared_error, r2_score, mean_absolute_percentage_error, confusion_matrix
+from sklearn.ensemble import ExtraTreesRegressor, AdaBoostRegressor, RandomForestRegressor, VotingRegressor, GradientBoostingRegressor
+# from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.svm import SVR
+# from lightgbm import LGBMClassifier
+from hyperopt import fmin, tpe, hp, Trials, space_eval
+from sklearn.feature_selection import SelectKBest, f_classif, f_regression
+import warnings
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+import time
+
+warnings.filterwarnings('ignore')
+
+
+# Предобработка данных
+path_to_file = "E:/Python/Python Projects/PycharmProjects/synthetic_insurance_data.csv"
+df = pd.read_csv(path_to_file)
+# df = df.iloc[:len(df)//10]
+start = time.perf_counter()
+df = df.dropna()
+X, y = df.drop(columns=["Credit_Score"]), df["Credit_Score"]
+numeric = ["Age", "Married_Premium_Discount", "Prior_Insurance_Premium_Adjustment",
+           "Claims_Adjustment", "Policy_Adjustment", "Premium_Amount", "Total_Discounts",
+           "Time_Since_First_Contact", "Website_Visits", "Inquiries", "Quotes_Requested",
+           "Time_to_Conversion", "Premium_Adjustment_Credit", "Premium_Adjustment_Region"]
+labelord = ["reason_start", "reason_end", "album_name", "artist_name", "album_name", "track_name", "platform"]
+labelonehot = ["Marital_Status", "Prior_Insurance", "Claims_Severity", "Policy_Type", "Source_of_Lead", "Region"]
+passth = ["Is_Senior", "Safe_Driver_Discount", "Multi_Policy_Discount", "Bundling_Discount", "Conversion_Status"]
+scaler = StandardScaler()
+ordencoder = OrdinalEncoder()
+onehot = OneHotEncoder()
+preproccesor = ColumnTransformer(
+    transformers=[
+        ('num', scaler, numeric),
+        ('label', onehot, labelonehot),
+        ('bin', "passthrough", passth)
+    ]
+)
+X = preproccesor.fit_transform(X)
+end = time.perf_counter()
+print(f"Время предобработки: {end - start} s\n")
+# poly = PolynomialFeatures(degree=2, interaction_only=True)
+# X = poly.fit_transform(X)
+# selector = SelectKBest(score_func=f_classif, k=12)
+# X = selector.fit_transform(X, y)
+# smote = SMOTETomek(sampling_strategy="auto")
+# X, y = smote.fit_resample(X, y)
+# selector = SelectKBest(score_func=f_regression, k=10)
+# X = selector.fit_transform(X, y)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3)
+results = {}
+
+# Функция для оценки моделей при подборе гиперпараметров
+def objective(params, model):
+    global X_train, X_test, y_train, y_test
+    model = model(**params)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    mape = mean_absolute_percentage_error(y_test, y_pred)
+    score = mae - r2 * 30 + mape * 200
+    return score
+
+# Создание пространств гиперпараметров
+space_extra3 = {
+    'n_estimators': hp.choice('n_estimators', range(1, 1000)),
+    'max_depth': hp.choice('max_depth', range(1, 30)),
+    'n_jobs': -1
+}
+
+space_adaboost = {
+    'n_estimators': hp.choice('n_estimators', range(1, 1000)),
+    'loss': hp.choice('loss', ['linear', 'square', 'exponential']),
+    'learning_rate': hp.uniform('learning_rate', 0.001, 2.0)
+}
+
+space_SVR = {
+    'C': hp.uniform('C', 0.01, 2.0),
+    'kernel': hp.choice('krenel', ['linear', 'rbf', 'poly'])
+}
+
+space_GBR = {
+    'n_estimators': hp.choice('n_estimators', range(1, 1000)),
+    'max_depth': hp.choice('max_depth', range(1, 30))
+}
+
+# Инициализация моделей и поиск гиперпараметров
+model1 = ExtraTreesRegressor
+model2 = AdaBoostRegressor
+model3 = SVR
+model4 = GradientBoostingRegressor
+model5 = LinearRegression(n_jobs=-1)
+model5.fit(X_train, y_train)
+y_pred = model5.predict(X_test)
+print("Linear Regressor")
+print(f"mean_absolute_error: {mean_absolute_error(y_test, y_pred)}")
+print(f"r2_score: {r2_score(y_test, y_pred)}")
+print(f"mean_absolute_percentage_error: {mean_absolute_percentage_error(y_test, y_pred)}\n")
+
+spaces = {
+    "ExtraTrees": (model1, space_extra3),
+    "AdaBoost": (model2, space_adaboost),
+    "SVR": (model3, space_SVR),
+    "GBR": (model4, space_GBR),
+}
+
+trials = {}
+best_params = {}
+times = []
+
+for model_name, (model, space) in spaces.items():
+    start = time.perf_counter()
+    trials[model_name] = Trials()
+    best_params[model_name] = fmin(fn=lambda params: objective(params, model), space=space,
+                                   algo=tpe.suggest, max_evals=200, trials=trials[model_name])
+    end = time.perf_counter()
+    times.append(end - start)
+    print(f"Лучшие параметры для {model_name}: {space_eval(spaces[model_name][1], best_params[model_name])}")
+print()
+
+# Вывод времени подбора гиперпараметров
+for model_name, period in zip(spaces, times):
+    print(f"Время подбора гиперпараметров {model_name}: {period} s")
+print(f"Общее время подбора гиперпараметров: {sum(times)} s\n")
+
+# Оценка моделей с подобранными гиперпараметрами
+times = []
+times_eval = []
+models = {}
+for model_name in trials:
+    start = time.perf_counter()
+    model = spaces[model_name][0](**space_eval(spaces[model_name][1], best_params[model_name]))
+    model.fit(X_train, y_train)
+    end = time.perf_counter()
+    times.append(end - start)
+    models[model_name] = model
+    start = time.perf_counter()
+    y_pred = model.predict(X_test)
+    end = time.perf_counter()
+    times_eval.append(end - start)
+    print(model_name)
+    print(f"mean_absolute_error: {mean_absolute_error(y_test, y_pred)}")
+    print(f"r2_score: {r2_score(y_test, y_pred)}")
+    print(f"mean_absolute_percentage_error: {mean_absolute_percentage_error(y_test, y_pred)}\n")
+    print()
+
+# Вывод времени обучения и предсказания моделей
+for model_name, time_train, time_eval in zip(spaces, times, times_eval):
+    print(f"Время обучения {model_name}: {time_train} s")
+    print(f"Время предсказания {model_name}: {time_eval} s")
+print(f"Общее время обучения: {sum(times)} s\n")
+print(f"Общее время предсказания: {sum(times_eval)} s\n")
+
+# Создание мета-модели на основе моделей с подобранными гиперпараметрами
+estimators = [(name, model) for name, model in models.items()]
+model = VotingRegressor(estimators=estimators)
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+print("Voting Regressor")
+print(f"mean_absolute_error: {mean_absolute_error(y_test, y_pred)}")
+print(f"r2_score: {r2_score(y_test, y_pred)}")
+print(f"mean_absolute_percentage_error: {mean_absolute_percentage_error(y_test, y_pred)}\n")
+
+
+# Время предобработки: 0.05539709999720799 s
+#
+# Linear Regressor
+# mean_absolute_error: 24.534075799132605
+# r2_score: 0.6232015217398985
+# mean_absolute_percentage_error: 0.03433560976853434
+#
+# Лучшие параметры для ExtraTrees: {'max_depth': 2, 'n_estimators': 226, 'n_jobs': -1}
+# Лучшие параметры для AdaBoost: {'learning_rate': 0.0025162559900956914, 'loss': 'square', 'n_estimators': 128}
+# Лучшие параметры для SVR: {'C': 1.9999718199705154, 'kernel': 'linear'}
+# Лучшие параметры для GBR: {'max_depth': 1, 'n_estimators': 25}
+#
+# Время подбора гиперпараметров ExtraTrees: 721.7934969999988 s
+# Время подбора гиперпараметров AdaBoost: 1686.6049452000007 s
+# Время подбора гиперпараметров SVR: 2783.3431200999985 s
+# Время подбора гиперпараметров GBR: 3567.722231599997 s
+# Общее время подбора гиперпараметров: 8759.463793899995 s
+#
+# ExtraTrees
+# mean_absolute_error: 24.538186264825416
+# r2_score: 0.6231711204607673
+# mean_absolute_percentage_error: 0.034339815663000046
+#
+#
+# AdaBoost
+# mean_absolute_error: 24.638562231213562
+# r2_score: 0.6229129805569231
+# mean_absolute_percentage_error: 0.03449327500630359
+#
+#
+# SVR
+# mean_absolute_error: 24.160484168728978
+# r2_score: 0.6105571637841244
+# mean_absolute_percentage_error: 0.033740570576943144
+#
+#
+# GBR
+# mean_absolute_error: 24.239279996716835
+# r2_score: 0.6197576097082611
+# mean_absolute_percentage_error: 0.03391996933205588
+#
+#
+# Время обучения ExtraTrees: 0.3588668000011239 s
+# Время предсказания ExtraTrees: 0.07230359999812208 s
+# Время обучения AdaBoost: 3.3545523999928264 s
+# Время предсказания AdaBoost: 0.3078113000083249 s
+# Время обучения SVR: 10.959614199993666 s
+# Время предсказания SVR: 2.977110099993297 s
+# Время обучения GBR: 0.18411840000771917 s
+# Время предсказания GBR: 0.0028144000098109245 s
+# Общее время обучения: 14.857151799995336 s
+#
+# Общее время предсказания: 3.360039400009555 s
+#
+# Voting Regressor
+# mean_absolute_error: 24.305986165233044
+# r2_score: 0.621990983888623
+# mean_absolute_percentage_error: 0.03399992272296711
+
